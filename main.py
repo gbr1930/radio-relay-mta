@@ -2,7 +2,6 @@ import os
 import re
 import subprocess
 import shutil
-from urllib.parse import urlparse
 
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
@@ -15,7 +14,7 @@ app = FastAPI(
 
 
 # =========================================================
-# CONFIGURAÇÕES
+# CONFIGURAÇÕES DO EQUALIZADOR
 # =========================================================
 
 FREQS = [
@@ -98,11 +97,12 @@ DENO_PATH = shutil.which("deno") or "/root/.deno/bin/deno"
 YTDLP_PATH = shutil.which("yt-dlp") or "/usr/local/bin/yt-dlp"
 FFMPEG_PATH = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
 
-BGUTIL_HOME = "/app/bgutil-ytdlp-pot-provider/server"
+BGUTIL_PATH = "/app/bgutil-ytdlp-pot-provider/server"
+BGUTIL_URL = "http://127.0.0.1:4416"
 
 
 # =========================================================
-# VERIFICAÇÃO DO SISTEMA
+# LOG DO SISTEMA
 # =========================================================
 
 print("")
@@ -112,17 +112,18 @@ print("==========================================")
 print("DENO:", DENO_PATH)
 print("YT-DLP:", YTDLP_PATH)
 print("FFMPEG:", FFMPEG_PATH)
-print("BGUTIL:", BGUTIL_HOME)
+print("BGUTIL:", BGUTIL_PATH)
+print("BGUTIL URL:", BGUTIL_URL)
 print("DENO EXISTE:", os.path.exists(DENO_PATH))
 print("YT-DLP EXISTE:", os.path.exists(YTDLP_PATH))
 print("FFMPEG EXISTE:", os.path.exists(FFMPEG_PATH))
-print("BGUTIL EXISTE:", os.path.exists(BGUTIL_HOME))
+print("BGUTIL EXISTE:", os.path.exists(BGUTIL_PATH))
 print("==========================================")
 print("")
 
 
 # =========================================================
-# IDENTIFICA YOUTUBE
+# YOUTUBE
 # =========================================================
 
 def is_youtube_url(url: str) -> bool:
@@ -137,34 +138,96 @@ def is_youtube_url(url: str) -> bool:
 
 
 # =========================================================
-# LIMPA URL DO YOUTUBE
+# LIMPA URL
 # =========================================================
 
 def clean_youtube_url(url: str) -> str:
 
-    """
-    Remove parâmetros desnecessários de playlist/radio.
+    if "youtube.com/watch" in url:
 
-    Exemplo:
+        match = re.search(
+            r"(?:v=)([^&]+)",
+            url
+        )
 
-    https://www.youtube.com/watch?v=ABC&list=RDABC&start_radio=1
+        if match:
 
-    vira:
+            video_id = match.group(1)
 
-    https://www.youtube.com/watch?v=ABC
-    """
+            return (
+                "https://www.youtube.com/watch?v="
+                + video_id
+            )
 
-    if "youtube.com/watch" not in url:
-        return url
 
-    match = re.search(r"(?:v=)([^&]+)", url)
+    if "youtu.be/" in url:
 
-    if match:
-        video_id = match.group(1)
+        match = re.search(
+            r"youtu\.be/([^?&]+)",
+            url
+        )
 
-        return f"https://www.youtube.com/watch?v={video_id}"
+        if match:
+
+            video_id = match.group(1)
+
+            return (
+                "https://www.youtube.com/watch?v="
+                + video_id
+            )
+
 
     return url
+
+
+# =========================================================
+# TESTA BGUTIL
+# =========================================================
+
+def check_bgutil():
+
+    try:
+
+        result = subprocess.run(
+
+            [
+                "curl",
+                "-s",
+                "--max-time",
+                "3",
+                f"{BGUTIL_URL}/"
+            ],
+
+            stdout=subprocess.PIPE,
+
+            stderr=subprocess.PIPE,
+
+            text=True
+
+        )
+
+        print(
+            "BGUTIL HTTP STATUS:",
+            result.returncode
+        )
+
+        if result.stdout:
+
+            print(
+                "BGUTIL RESPONSE:",
+                result.stdout[:300]
+            )
+
+        return result.returncode == 0
+
+    except Exception as e:
+
+        print(
+            "ERRO TESTANDO BGUTIL:",
+            e
+        )
+
+        return False
 
 
 # =========================================================
@@ -196,10 +259,25 @@ def get_real_stream_url(url: str) -> str:
     print("URL LIMPA:")
     print(url)
     print("==========================================")
+    print("")
 
 
     # -----------------------------------------------------
-    # Comando yt-dlp
+    # VERIFICA BGUTIL
+    # -----------------------------------------------------
+
+    print("TESTANDO BGUTIL...")
+
+    bgutil_ok = check_bgutil()
+
+    print(
+        "BGUTIL DISPONÍVEL:",
+        bgutil_ok
+    )
+
+
+    # -----------------------------------------------------
+    # YT-DLP
     # -----------------------------------------------------
 
     command = [
@@ -217,8 +295,13 @@ def get_real_stream_url(url: str) -> str:
         "--js-runtimes",
         f"deno:{DENO_PATH}",
 
+        # PO TOKEN PROVIDER
         "--extractor-args",
-        f"youtubepot-bgutilscript:server_home={BGUTIL_HOME}",
+        f"youtubepot-bgutilhttp:base_url={BGUTIL_URL}",
+
+        # Cliente mweb
+        "--extractor-args",
+        "youtube:player-client=mweb",
 
         "-f",
         "bestaudio/best",
@@ -226,12 +309,16 @@ def get_real_stream_url(url: str) -> str:
         "--get-url",
 
         url
+
     ]
 
 
     print("")
-    print("EXECUTANDO YT-DLP:")
+    print("==========================================")
+    print("EXECUTANDO YT-DLP")
+    print("==========================================")
     print(" ".join(command))
+    print("==========================================")
     print("")
 
 
@@ -247,9 +334,9 @@ def get_real_stream_url(url: str) -> str:
 
             text=True,
 
-            timeout=90
-        )
+            timeout=120
 
+        )
 
     except subprocess.TimeoutExpired:
 
@@ -262,7 +349,10 @@ def get_real_stream_url(url: str) -> str:
 
     except Exception as e:
 
-        print("ERRO EXECUTANDO YT-DLP:")
+        print(
+            "ERRO EXECUTANDO YT-DLP:"
+        )
+
         print(str(e))
 
         raise RuntimeError(
@@ -270,7 +360,10 @@ def get_real_stream_url(url: str) -> str:
         )
 
 
-    print("YT-DLP RETURN CODE:", result.returncode)
+    print(
+        "YT-DLP RETURN CODE:",
+        result.returncode
+    )
 
 
     if result.stderr:
@@ -278,49 +371,42 @@ def get_real_stream_url(url: str) -> str:
         print("")
         print("YT-DLP STDERR:")
         print(result.stderr)
+        print("")
 
 
     if result.returncode != 0:
 
-        print("")
-        print("==========================================")
-        print("YT-DLP FALHOU")
-        print("==========================================")
-        print("")
-
         raise RuntimeError(
-            "yt-dlp não conseguiu extrair o áudio do YouTube."
+            "yt-dlp não conseguiu extrair "
+            "o áudio do YouTube."
         )
 
-
-    # -----------------------------------------------------
-    # Obtém URL retornada
-    # -----------------------------------------------------
 
     audio_url = result.stdout.strip()
 
 
     if not audio_url:
 
-        print("YT-DLP NÃO RETORNOU URL")
-
         raise RuntimeError(
             "yt-dlp não retornou uma URL de áudio."
         )
 
 
-    # Caso existam várias linhas, pegar a última válida
     lines = [
+
         line.strip()
+
         for line in audio_url.splitlines()
+
         if line.strip()
+
     ]
 
 
     if not lines:
 
         raise RuntimeError(
-            "yt-dlp retornou uma resposta vazia."
+            "Resposta do yt-dlp vazia."
         )
 
 
@@ -331,8 +417,10 @@ def get_real_stream_url(url: str) -> str:
     print("==========================================")
     print("ÁUDIO EXTRAÍDO COM SUCESSO")
     print("==========================================")
-    print("URL OBTIDA:")
-    print(audio_url[:300])
+    print(
+        "URL OBTIDA:",
+        audio_url[:300]
+    )
     print("==========================================")
     print("")
 
@@ -341,7 +429,7 @@ def get_real_stream_url(url: str) -> str:
 
 
 # =========================================================
-# CONSTRÓI FILTRO DO EQUALIZADOR
+# EQUALIZADOR
 # =========================================================
 
 def build_filter(
@@ -353,12 +441,12 @@ def build_filter(
 ):
 
     if gains is None:
+
         gains = DEFAULT_GAINS
 
 
-    # Garantir 32 bandas
-
     gains = list(gains)
+
 
     if len(gains) < len(FREQS):
 
@@ -366,16 +454,14 @@ def build_filter(
             len(FREQS) - len(gains)
         )
 
+
     gains = gains[:len(FREQS)]
 
 
     filters = []
 
 
-    # -----------------------------------------------------
     # 32 BANDAS
-    # -----------------------------------------------------
-
     for freq, gain in zip(FREQS, gains):
 
         try:
@@ -387,9 +473,10 @@ def build_filter(
             gain = 0
 
 
-        # Limita ganho para evitar valores absurdos
-
-        gain = max(-15, min(15, gain))
+        gain = max(
+            -15,
+            min(15, gain)
+        )
 
 
         if gain != 0:
@@ -405,20 +492,22 @@ def build_filter(
             )
 
 
-    # -----------------------------------------------------
     # BASS BOOST
-    # -----------------------------------------------------
-
     try:
 
-        bass_boost = float(bass_boost)
+        bass_boost = float(
+            bass_boost
+        )
 
     except:
 
         bass_boost = 0
 
 
-    bass_boost = max(0, min(15, bass_boost))
+    bass_boost = max(
+        0,
+        min(15, bass_boost)
+    )
 
 
     if bass_boost > 0:
@@ -434,10 +523,7 @@ def build_filter(
         )
 
 
-    # -----------------------------------------------------
     # REVERB
-    # -----------------------------------------------------
-
     if reverb:
 
         filters.append(
@@ -451,10 +537,7 @@ def build_filter(
         )
 
 
-    # -----------------------------------------------------
-    # EFEITO 3D / SURROUND
-    # -----------------------------------------------------
-
+    # 3D / SURROUND
     if surround:
 
         filters.append(
@@ -466,10 +549,7 @@ def build_filter(
         )
 
 
-    # -----------------------------------------------------
     # VOLUME
-    # -----------------------------------------------------
-
     try:
 
         volume = float(volume)
@@ -479,7 +559,10 @@ def build_filter(
         volume = 1.0
 
 
-    volume = max(0.1, min(3.0, volume))
+    volume = max(
+        0.1,
+        min(3.0, volume)
+    )
 
 
     filters.append(
@@ -487,10 +570,7 @@ def build_filter(
     )
 
 
-    # -----------------------------------------------------
     # LIMITER
-    # -----------------------------------------------------
-
     filters.append(
         "alimiter=limit=0.95"
     )
@@ -522,12 +602,23 @@ async def home():
     except FileNotFoundError:
 
         return """
+
         <html>
+
         <body>
-        <h1>MTA/FiveM Live Equalizer</h1>
-        <p>Arquivo index.html não encontrado.</p>
+
+        <h1>
+        MTA/FiveM Live Equalizer
+        </h1>
+
+        <p>
+        Arquivo index.html não encontrado.
+        </p>
+
         </body>
+
         </html>
+
         """
 
 
@@ -538,17 +629,29 @@ async def home():
 @app.get("/health")
 async def health():
 
+    bgutil_ok = check_bgutil()
+
     return {
 
         "status": "ok",
 
-        "deno": os.path.exists(DENO_PATH),
+        "deno": os.path.exists(
+            DENO_PATH
+        ),
 
-        "yt_dlp": os.path.exists(YTDLP_PATH),
+        "yt_dlp": os.path.exists(
+            YTDLP_PATH
+        ),
 
-        "ffmpeg": os.path.exists(FFMPEG_PATH),
+        "ffmpeg": os.path.exists(
+            FFMPEG_PATH
+        ),
 
-        "bgutil": os.path.exists(BGUTIL_HOME)
+        "bgutil": os.path.exists(
+            BGUTIL_PATH
+        ),
+
+        "bgutil_server": bgutil_ok
 
     }
 
@@ -576,22 +679,30 @@ async def stream(
     print("==========================================")
     print("NOVO STREAM")
     print("==========================================")
+
     print("URL:", url)
+
     print("Bass:", bass)
+
     print("Volume:", volume)
+
     print("Reverb:", reverb)
+
     print("Surround:", surround)
+
     print("==========================================")
     print("")
 
 
     # -----------------------------------------------------
-    # Obtém fonte
+    # URL DO ÁUDIO
     # -----------------------------------------------------
 
     try:
 
-        audio_source = get_real_stream_url(url)
+        audio_source = get_real_stream_url(
+            url
+        )
 
     except Exception as e:
 
@@ -600,15 +711,18 @@ async def stream(
         print(str(e))
         print("")
 
+
         return JSONResponse(
 
             status_code=500,
 
             content={
 
-                "error": "Não foi possível obter o áudio.",
+                "error":
+                    "Não foi possível obter o áudio.",
 
-                "details": str(e)
+                "details":
+                    str(e)
 
             }
 
@@ -616,7 +730,7 @@ async def stream(
 
 
     # -----------------------------------------------------
-    # Equalizador
+    # FILTRO
     # -----------------------------------------------------
 
     filter_chain = build_filter(
@@ -644,7 +758,7 @@ async def stream(
 
 
     # -----------------------------------------------------
-    # FFmpeg
+    # FFMPEG
     # -----------------------------------------------------
 
     command = [
@@ -716,8 +830,10 @@ async def stream(
 
     except Exception as e:
 
-        print("ERRO INICIANDO FFMPEG:")
-        print(str(e))
+        print(
+            "ERRO INICIANDO FFMPEG:",
+            str(e)
+        )
 
         return JSONResponse(
 
@@ -725,9 +841,11 @@ async def stream(
 
             content={
 
-                "error": "Não foi possível iniciar o FFmpeg.",
+                "error":
+                    "Não foi possível iniciar o FFmpeg.",
 
-                "details": str(e)
+                "details":
+                    str(e)
 
             }
 
@@ -742,11 +860,14 @@ async def stream(
 
         headers={
 
-            "Cache-Control": "no-cache",
+            "Cache-Control":
+                "no-cache",
 
-            "Connection": "keep-alive",
+            "Connection":
+                "keep-alive",
 
-            "Accept-Ranges": "none"
+            "Accept-Ranges":
+                "none"
 
         }
 
