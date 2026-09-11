@@ -862,8 +862,7 @@ def stream_audio(
     )
 
 
-    audio_source =
-        get_real_stream_url(url)
+audio_source = get_real_stream_url(url)
 
 
     command = [
