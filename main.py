@@ -275,29 +275,21 @@ def get_real_stream_url(url: str) -> str:
     # YT-DLP
     # -----------------------------------------------------
 
-    command = [
-        YTDLP_PATH,
-
-        "--no-playlist",
-
-        "--no-check-certificates",
-
-        "--js-runtimes",
-        f"deno:{DENO_PATH}",
-
-        "--extractor-args",
-        f"youtubepot-bgutilhttp:base_url={BGUTIL_URL}",
-
-        "--extractor-args",
-        "youtube:player-client=mweb",
-
-        "-f",
-        "bestaudio/best",
-
-        "--get-url",
-
-        url
-    ]
+command = [
+    YTDLP_PATH,
+    "--no-playlist",
+    "--no-check-certificates",
+    "--js-runtimes",
+    f"deno:{DENO_PATH}",
+    "--extractor-args",
+    f"youtubepot-bgutilhttp:base_url={BGUTIL_URL}",
+    "--extractor-args",
+    "youtube:player-client=default,web_embedded",
+    "-f",
+    "bestaudio/best",
+    "--get-url",
+    url
+]
 
 
     print("")
