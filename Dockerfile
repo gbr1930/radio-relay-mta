@@ -10,8 +10,7 @@ WORKDIR /app
 # Instala dependências Python
 RUN pip install --no-cache-dir fastapi uvicorn yt-dlp
 
-COPY main.py .
-COPY index.html .
+COPY . .
 
 # O Render define a variável PORT dinamicamente; o valor $PORT garante que funcione sem falhas
 ENV PORT=10000
