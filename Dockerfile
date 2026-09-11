@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Instala FFmpeg, Deno e dependências do sistema
+# Dependências
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
@@ -9,21 +9,20 @@ RUN apt-get update && \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Instala Deno
+# Instala Deno diretamente no local padrão
 RUN curl -fsSL https://deno.land/install.sh | sh
 
+# Deixa o Deno disponível para todos os comandos
 ENV DENO_INSTALL=/root/.deno
-ENV PATH="/root/.deno/bin:$PATH"
+ENV PATH=/root/.deno/bin:$PATH
 
 WORKDIR /app
 
-# Instala Python + yt-dlp com EJS
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    "yt-dlp[default]"
+# Atualiza pip e instala yt-dlp + EJS
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir "yt-dlp[default]" fastapi uvicorn
 
-# Copia todos os arquivos
+# Copia TODOS os arquivos do projeto
 COPY . .
 
 ENV PORT=10000
