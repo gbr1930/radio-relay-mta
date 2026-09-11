@@ -1,3 +1,4 @@
+import os
 import subprocess
 from typing import Optional
 
@@ -7,7 +8,6 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 app = FastAPI(title="MTA/FiveM Live Equalizer")
 
 
-# Frequências do equalizador
 FREQS = [
     20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400,
     500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000,
@@ -15,7 +15,6 @@ FREQS = [
 ]
 
 
-# Ganhos padrão
 DEFAULT_GAINS = [
     6, 6, 6, 5.5, 5, 4.5, 4, 3.5, 3, 2.5, 2, 1.5, 1, 0.5,
     0, 0, -0.5, -1, -1, -1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5,
@@ -25,108 +24,112 @@ DEFAULT_GAINS = [
 
 @app.get("/", response_class=HTMLResponse)
 def index():
+
     try:
         with open("index.html", "r", encoding="utf-8") as f:
             return f.read()
 
     except FileNotFoundError:
+
         return """
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Erro</title>
-        </head>
-        <body>
-            <h2>Arquivo index.html não encontrado!</h2>
-            <p>Coloque o arquivo index.html na mesma pasta do main.py.</p>
-        </body>
-        </html>
+        <h2>Arquivo index.html não encontrado!</h2>
         """
 
 
 def get_real_stream_url(url: str) -> str:
-    """
-    Se a URL for do YouTube, tenta obter a URL real
-    do áudio usando yt-dlp.
 
-    Para outras URLs, retorna a própria URL.
-    """
+    # URLs normais de rádio/stream
+    if "youtube.com" not in url and "youtu.be" not in url:
+        return url
 
-    if "youtube.com" in url or "youtu.be" in url:
+    print("====================================")
+    print("YOUTUBE DETECTADO")
+    print("URL:", url)
+    print("====================================")
 
-        try:
-            command = [
-                "yt-dlp",
-                "-g",
-                "-f",
-                "bestaudio/best",
-                url
-            ]
+    command = [
+        "yt-dlp",
 
-            result = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=20,
-            )
+        "--no-playlist",
 
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip().splitlines()[0]
+        "-f",
+        "bestaudio/best",
 
-            print("yt-dlp não conseguiu obter o stream.")
+        "--get-url",
+
+        url
+    ]
+
+    try:
+
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60
+        )
+
+        print("YT-DLP RETURN CODE:", result.returncode)
+
+        if result.stderr:
+            print("YT-DLP ERRO:")
             print(result.stderr)
 
-        except Exception as error:
-            print(f"Erro no yt-dlp: {error}")
+        if result.returncode != 0:
+            raise RuntimeError(
+                "yt-dlp não conseguiu extrair o áudio."
+            )
 
-    return url
+        urls = [
+            line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip()
+        ]
+
+        if not urls:
+            raise RuntimeError(
+                "yt-dlp não retornou nenhuma URL."
+            )
+
+        print("ÁUDIO EXTRAÍDO COM SUCESSO")
+
+        return urls[0]
+
+    except Exception as error:
+
+        print("ERRO AO OBTER ÁUDIO DO YOUTUBE:")
+        print(error)
+
+        raise
 
 
 def parse_bands(bands: Optional[str]):
-    """
-    Converte a string:
-
-    6,6,5.5,5,...
-
-    em uma lista de números.
-    """
 
     if not bands:
         return DEFAULT_GAINS
 
     try:
+
         gains = [
             float(value.strip())
             for value in bands.split(",")
         ]
 
-        # Precisamos exatamente das 32 bandas
         if len(gains) != 32:
-            print(
-                f"Número incorreto de bandas: "
-                f"{len(gains)}. Esperado: 32."
-            )
-
             return DEFAULT_GAINS
 
-        # Limita cada banda entre -12 dB e +12 dB
-        gains = [
+        return [
             max(-12, min(12, value))
             for value in gains
         ]
 
-        return gains
+    except Exception:
 
-    except Exception as error:
-        print(f"Erro ao interpretar bandas: {error}")
         return DEFAULT_GAINS
 
 
 def build_filter(gains):
-    """
-    Monta a cadeia de filtros do FFmpeg.
-    """
 
     filters = []
 
@@ -140,10 +143,7 @@ def build_filter(gains):
             f"g={gain}"
         )
 
-    # Volume
     filters.append("volume=1.8")
-
-    # Limiter para evitar clipping
     filters.append("alimiter=limit=0.95")
 
     return ",".join(filters)
@@ -151,6 +151,7 @@ def build_filter(gains):
 
 @app.get("/health")
 def health():
+
     return {
         "status": "ok"
     }
@@ -158,37 +159,39 @@ def health():
 
 @app.get("/stream")
 def stream_audio(
-    url: str = Query(
-        ...,
-        description="URL da rádio, stream ou YouTube"
-    ),
+    url: str = Query(...),
     bands: Optional[str] = None,
 ):
 
-    # Lê as bandas do equalizador
+    print("")
+    print("====================================")
+    print("NOVO STREAM")
+    print("URL:", url)
+    print("====================================")
+
     gains = parse_bands(bands)
 
-    # Monta os filtros
     filter_chain = build_filter(gains)
 
-    # Obtém o stream real
-    audio_source = get_real_stream_url(url)
+    try:
 
-    print("Fonte original:")
-    print(url)
+        audio_source = get_real_stream_url(url)
 
-    print("Fonte utilizada pelo FFmpeg:")
-    print(audio_source)
+    except Exception as error:
 
-    # Comando FFmpeg
+        return {
+            "error": "Não foi possível obter o áudio.",
+            "details": str(error)
+        }
+
     command = [
         "ffmpeg",
 
         "-hide_banner",
-        "-loglevel",
-        "error",
 
-        # Reconexão automática
+        "-loglevel",
+        "warning",
+
         "-reconnect",
         "1",
 
@@ -198,47 +201,40 @@ def stream_audio(
         "-reconnect_delay_max",
         "5",
 
-        # Entrada
         "-i",
         audio_source,
 
-        # Sem vídeo
         "-vn",
 
-        # Equalizador + volume + limiter
         "-af",
         filter_chain,
 
-        # Codec AAC
         "-c:a",
         "aac",
 
-        # Bitrate
         "-b:a",
         "128k",
 
-        # Formato
         "-f",
         "adts",
 
-        # Envia o áudio pelo stdout
-        "pipe:1",
+        "pipe:1"
     ]
+
+    print("INICIANDO FFMPEG")
 
     try:
 
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.PIPE
         )
 
     except Exception as error:
 
-        print(f"Erro ao iniciar FFmpeg: {error}")
-
         return {
-            "error": "Não foi possível iniciar o FFmpeg",
+            "error": "Erro ao iniciar FFmpeg.",
             "details": str(error)
         }
 
@@ -248,5 +244,5 @@ def stream_audio(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-        },
+        }
     )
