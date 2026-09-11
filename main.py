@@ -1,3 +1,4 @@
+```python
 import os
 import re
 import subprocess
@@ -18,74 +19,18 @@ app = FastAPI(
 # =========================================================
 
 FREQS = [
-    20,
-    25,
-    31.5,
-    40,
-    50,
-    63,
-    80,
-    100,
-    125,
-    160,
-    200,
-    250,
-    315,
-    400,
-    500,
-    630,
-    800,
-    1000,
-    1250,
-    1600,
-    2000,
-    2500,
-    3150,
-    4000,
-    5000,
-    6300,
-    8000,
-    10000,
-    12500,
-    16000,
-    20000,
-    22000
+    20, 25, 31.5, 40, 50, 63, 80, 100,
+    125, 160, 200, 250, 315, 400, 500, 630,
+    800, 1000, 1250, 1600, 2000, 2500, 3150,
+    4000, 5000, 6300, 8000, 10000, 12500,
+    16000, 20000, 22000
 ]
 
-
 DEFAULT_GAINS = [
-    6,
-    6,
-    6,
-    5.5,
-    5,
-    4.5,
-    4,
-    3.5,
-    3,
-    2.5,
-    2,
-    1.5,
-    1,
-    0.5,
-    0,
-    0,
-    -0.5,
-    -1,
-    -1,
-    -1,
-    -0.5,
-    0,
-    0.5,
-    1,
-    1.5,
-    2,
-    2.5,
-    3,
-    3.5,
-    4,
-    4.5,
-    5
+    6, 6, 6, 5.5, 5, 4.5, 4, 3.5,
+    3, 2.5, 2, 1.5, 1, 0.5, 0, 0,
+    -0.5, -1, -1, -1, -0.5, 0, 0.5, 1,
+    1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5
 ]
 
 
@@ -275,21 +220,21 @@ def get_real_stream_url(url: str) -> str:
     # YT-DLP
     # -----------------------------------------------------
 
-command = [
-    YTDLP_PATH,
-    "--no-playlist",
-    "--no-check-certificates",
-    "--js-runtimes",
-    f"deno:{DENO_PATH}",
-    "--extractor-args",
-    f"youtubepot-bgutilhttp:base_url={BGUTIL_URL}",
-    "--extractor-args",
-    "youtube:player-client=default,web_embedded",
-    "-f",
-    "bestaudio/best",
-    "--get-url",
-    url
-]
+    command = [
+        YTDLP_PATH,
+        "--no-playlist",
+        "--no-check-certificates",
+        "--js-runtimes",
+        f"deno:{DENO_PATH}",
+        "--extractor-args",
+        f"youtubepot-bgutilhttp:base_url={BGUTIL_URL}",
+        "--extractor-args",
+        "youtube:player-client=default,web_embedded",
+        "-f",
+        "bestaudio/best",
+        "--get-url",
+        url
+    ]
 
 
     print("")
@@ -486,289 +431,5 @@ def build_filter(
 
     # -----------------------------------------------------
     # REVERB
-    # -----------------------------------------------------
-
-    if reverb:
-
-        filters.append(
-            "aecho="
-            "in_gain=0.8:"
-            "out_gain=0.6:"
-            "delays=80|160:"
-            "decays=0.25|0.12"
-        )
-
-
-    # -----------------------------------------------------
-    # 3D / SURROUND
-    # -----------------------------------------------------
-
-    if surround:
-
-        filters.append(
-            "stereotools="
-            "mlev=1:"
-            "mwid=1.4"
-        )
-
-
-    # -----------------------------------------------------
-    # VOLUME
-    # -----------------------------------------------------
-
-    try:
-        volume = float(volume)
-
-    except:
-        volume = 1.0
-
-
-    volume = max(
-        0.1,
-        min(3.0, volume)
-    )
-
-
-    filters.append(
-        f"volume={volume}"
-    )
-
-
-    # -----------------------------------------------------
-    # LIMITER
-    # -----------------------------------------------------
-
-    filters.append(
-        "alimiter=limit=0.95"
-    )
-
-
-    return ",".join(filters)
-
-
-# =========================================================
-# HOME
-# =========================================================
-
-@app.get(
-    "/",
-    response_class=HTMLResponse
-)
-async def home():
-
-    try:
-
-        with open(
-            "index.html",
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            return f.read()
-
-    except FileNotFoundError:
-
-        return """
-        <html>
-        <body>
-        <h1>MTA/FiveM Live Equalizer</h1>
-        <p>Arquivo index.html não encontrado.</p>
-        </body>
-        </html>
-        """
-
-
-# =========================================================
-# HEALTH
-# =========================================================
-
-@app.get("/health")
-async def health():
-
-    bgutil_ok = check_bgutil()
-
-    return {
-        "status": "ok",
-        "deno": os.path.exists(DENO_PATH),
-        "yt_dlp": os.path.exists(YTDLP_PATH),
-        "ffmpeg": os.path.exists(FFMPEG_PATH),
-        "bgutil": os.path.exists(BGUTIL_PATH),
-        "bgutil_server": bgutil_ok
-    }
-
-
-# =========================================================
-# STREAM
-# =========================================================
-
-@app.get("/stream")
-async def stream(
-
-    url: str = Query(...),
-
-    bass: float = 0,
-
-    volume: float = 1.0,
-
-    reverb: int = 0,
-
-    surround: int = 0
-
-):
-
-    print("")
-    print("==========================================")
-    print("NOVO STREAM")
-    print("==========================================")
-    print("URL:", url)
-    print("Bass:", bass)
-    print("Volume:", volume)
-    print("Reverb:", reverb)
-    print("Surround:", surround)
-    print("==========================================")
-    print("")
-
-
-    # -----------------------------------------------------
-    # URL DO ÁUDIO
-    # -----------------------------------------------------
-
-    try:
-
-        audio_source = get_real_stream_url(
-            url
-        )
-
-    except Exception as e:
-
-        print("")
-        print("ERRO AO OBTER ÁUDIO:")
-        print(str(e))
-        print("")
-
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error":
-                    "Não foi possível obter o áudio.",
-                "details":
-                    str(e)
-            }
-        )
-
-
-    # -----------------------------------------------------
-    # FILTRO
-    # -----------------------------------------------------
-
-    filter_chain = build_filter(
-        gains=DEFAULT_GAINS,
-        bass_boost=bass,
-        volume=volume,
-        reverb=(reverb == 1),
-        surround=(surround == 1)
-    )
-
-
-    print("")
-    print("==========================================")
-    print("FILTRO FFMPEG")
-    print("==========================================")
-    print(filter_chain)
-    print("==========================================")
-    print("")
-
-
-    # -----------------------------------------------------
-    # FFMPEG
-    # -----------------------------------------------------
-
-    command = [
-
-        FFMPEG_PATH,
-
-        "-hide_banner",
-
-        "-loglevel",
-        "error",
-
-        "-reconnect",
-        "1",
-
-        "-reconnect_streamed",
-        "1",
-
-        "-reconnect_delay_max",
-        "5",
-
-        "-i",
-        audio_source,
-
-        "-vn",
-
-        "-af",
-        filter_chain,
-
-        "-c:a",
-        "aac",
-
-        "-b:a",
-        "192k",
-
-        "-ar",
-        "48000",
-
-        "-ac",
-        "2",
-
-        "-f",
-        "adts",
-
-        "pipe:1"
-    ]
-
-
-    print("")
-    print("==========================================")
-    print("INICIANDO FFMPEG")
-    print("==========================================")
-    print("")
-
-
-    try:
-
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0
-        )
-
-    except Exception as e:
-
-        print(
-            "ERRO INICIANDO FFMPEG:",
-            str(e)
-        )
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error":
-                    "Não foi possível iniciar o FFmpeg.",
-                "details":
-                    str(e)
-            }
-        )
-
-
-    return StreamingResponse(
-        process.stdout,
-        media_type="audio/aac",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Accept-Ranges": "none"
-        }
-    )
+    # -------------------------
+```
