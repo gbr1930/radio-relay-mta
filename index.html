@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>MTA/FiveM Live Equalizer</title>
+</head>
+
+<body>
+    <h1>MTA/FiveM Live Equalizer</h1>
+
+    <p>Interface funcionando!</p>
+
+    <input
+        type="text"
+        id="url"
+        placeholder="Cole aqui a URL da música ou stream"
+        style="width: 500px;"
+    >
+
+    <button onclick="playAudio()">▶ Play</button>
+
+    <br><br>
+
+    <audio id="player" controls></audio>
+
+    <script>
+        function playAudio() {
+            const url = document.getElementById("url").value;
+
+            if (!url) {
+                alert("Cole uma URL primeiro.");
+                return;
+            }
+
+            const streamUrl =
+                "/stream?url=" + encodeURIComponent(url);
+
+            const player =
+                document.getElementById("player");
+
+            player.src = streamUrl;
+            player.play();
+        }
+    </script>
+</body>
+</html>
