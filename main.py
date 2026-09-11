@@ -138,7 +138,7 @@ def is_youtube_url(url: str) -> bool:
 
 
 # =========================================================
-# LIMPA URL
+# LIMPA URL DO YOUTUBE
 # =========================================================
 
 def clean_youtube_url(url: str) -> str:
@@ -189,7 +189,6 @@ def check_bgutil():
     try:
 
         result = subprocess.run(
-
             [
                 "curl",
                 "-s",
@@ -197,13 +196,9 @@ def check_bgutil():
                 "3",
                 f"{BGUTIL_URL}/"
             ],
-
             stdout=subprocess.PIPE,
-
             stderr=subprocess.PIPE,
-
             text=True
-
         )
 
         print(
@@ -281,25 +276,18 @@ def get_real_stream_url(url: str) -> str:
     # -----------------------------------------------------
 
     command = [
-
         YTDLP_PATH,
 
         "--no-playlist",
-
-        "--no-warnings",
-
-        "--quiet",
 
         "--no-check-certificates",
 
         "--js-runtimes",
         f"deno:{DENO_PATH}",
 
-        # PO TOKEN PROVIDER
         "--extractor-args",
         f"youtubepot-bgutilhttp:base_url={BGUTIL_URL}",
 
-        # Cliente mweb
         "--extractor-args",
         "youtube:player-client=mweb",
 
@@ -309,7 +297,6 @@ def get_real_stream_url(url: str) -> str:
         "--get-url",
 
         url
-
     ]
 
 
@@ -325,17 +312,11 @@ def get_real_stream_url(url: str) -> str:
     try:
 
         result = subprocess.run(
-
             command,
-
             stdout=subprocess.PIPE,
-
             stderr=subprocess.PIPE,
-
             text=True,
-
             timeout=120
-
         )
 
     except subprocess.TimeoutExpired:
@@ -349,10 +330,7 @@ def get_real_stream_url(url: str) -> str:
 
     except Exception as e:
 
-        print(
-            "ERRO EXECUTANDO YT-DLP:"
-        )
-
+        print("ERRO EXECUTANDO YT-DLP:")
         print(str(e))
 
         raise RuntimeError(
@@ -393,13 +371,9 @@ def get_real_stream_url(url: str) -> str:
 
 
     lines = [
-
         line.strip()
-
         for line in audio_url.splitlines()
-
         if line.strip()
-
     ]
 
 
@@ -441,7 +415,6 @@ def build_filter(
 ):
 
     if gains is None:
-
         gains = DEFAULT_GAINS
 
 
@@ -461,15 +434,16 @@ def build_filter(
     filters = []
 
 
+    # -----------------------------------------------------
     # 32 BANDAS
+    # -----------------------------------------------------
+
     for freq, gain in zip(FREQS, gains):
 
         try:
-
             gain = float(gain)
 
         except:
-
             gain = 0
 
 
@@ -482,25 +456,22 @@ def build_filter(
         if gain != 0:
 
             filters.append(
-
                 f"equalizer="
                 f"f={freq}:"
                 f"width_type=q:"
                 f"width=1.414:"
                 f"g={gain}"
-
             )
 
 
+    # -----------------------------------------------------
     # BASS BOOST
-    try:
+    # -----------------------------------------------------
 
-        bass_boost = float(
-            bass_boost
-        )
+    try:
+        bass_boost = float(bass_boost)
 
     except:
-
         bass_boost = 0
 
 
@@ -513,49 +484,50 @@ def build_filter(
     if bass_boost > 0:
 
         filters.append(
-
             "bass="
             f"g={bass_boost}:"
             "f=100:"
             "width_type=q:"
             "width=1"
-
         )
 
 
+    # -----------------------------------------------------
     # REVERB
+    # -----------------------------------------------------
+
     if reverb:
 
         filters.append(
-
             "aecho="
             "in_gain=0.8:"
             "out_gain=0.6:"
             "delays=80|160:"
             "decays=0.25|0.12"
-
         )
 
 
+    # -----------------------------------------------------
     # 3D / SURROUND
+    # -----------------------------------------------------
+
     if surround:
 
         filters.append(
-
             "stereotools="
             "mlev=1:"
             "mwid=1.4"
-
         )
 
 
+    # -----------------------------------------------------
     # VOLUME
-    try:
+    # -----------------------------------------------------
 
+    try:
         volume = float(volume)
 
     except:
-
         volume = 1.0
 
 
@@ -570,7 +542,10 @@ def build_filter(
     )
 
 
+    # -----------------------------------------------------
     # LIMITER
+    # -----------------------------------------------------
+
     filters.append(
         "alimiter=limit=0.95"
     )
@@ -602,23 +577,12 @@ async def home():
     except FileNotFoundError:
 
         return """
-
         <html>
-
         <body>
-
-        <h1>
-        MTA/FiveM Live Equalizer
-        </h1>
-
-        <p>
-        Arquivo index.html não encontrado.
-        </p>
-
+        <h1>MTA/FiveM Live Equalizer</h1>
+        <p>Arquivo index.html não encontrado.</p>
         </body>
-
         </html>
-
         """
 
 
@@ -632,27 +596,12 @@ async def health():
     bgutil_ok = check_bgutil()
 
     return {
-
         "status": "ok",
-
-        "deno": os.path.exists(
-            DENO_PATH
-        ),
-
-        "yt_dlp": os.path.exists(
-            YTDLP_PATH
-        ),
-
-        "ffmpeg": os.path.exists(
-            FFMPEG_PATH
-        ),
-
-        "bgutil": os.path.exists(
-            BGUTIL_PATH
-        ),
-
+        "deno": os.path.exists(DENO_PATH),
+        "yt_dlp": os.path.exists(YTDLP_PATH),
+        "ffmpeg": os.path.exists(FFMPEG_PATH),
+        "bgutil": os.path.exists(BGUTIL_PATH),
         "bgutil_server": bgutil_ok
-
     }
 
 
@@ -679,17 +628,11 @@ async def stream(
     print("==========================================")
     print("NOVO STREAM")
     print("==========================================")
-
     print("URL:", url)
-
     print("Bass:", bass)
-
     print("Volume:", volume)
-
     print("Reverb:", reverb)
-
     print("Surround:", surround)
-
     print("==========================================")
     print("")
 
@@ -713,19 +656,13 @@ async def stream(
 
 
         return JSONResponse(
-
             status_code=500,
-
             content={
-
                 "error":
                     "Não foi possível obter o áudio.",
-
                 "details":
                     str(e)
-
             }
-
         )
 
 
@@ -734,17 +671,11 @@ async def stream(
     # -----------------------------------------------------
 
     filter_chain = build_filter(
-
         gains=DEFAULT_GAINS,
-
         bass_boost=bass,
-
         volume=volume,
-
         reverb=(reverb == 1),
-
         surround=(surround == 1)
-
     )
 
 
@@ -803,7 +734,6 @@ async def stream(
         "adts",
 
         "pipe:1"
-
     ]
 
 
@@ -817,15 +747,10 @@ async def stream(
     try:
 
         process = subprocess.Popen(
-
             command,
-
             stdout=subprocess.PIPE,
-
             stderr=subprocess.PIPE,
-
             bufsize=0
-
         )
 
     except Exception as e:
@@ -836,39 +761,22 @@ async def stream(
         )
 
         return JSONResponse(
-
             status_code=500,
-
             content={
-
                 "error":
                     "Não foi possível iniciar o FFmpeg.",
-
                 "details":
                     str(e)
-
             }
-
         )
 
 
     return StreamingResponse(
-
         process.stdout,
-
         media_type="audio/aac",
-
         headers={
-
-            "Cache-Control":
-                "no-cache",
-
-            "Connection":
-                "keep-alive",
-
-            "Accept-Ranges":
-                "none"
-
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Accept-Ranges": "none"
         }
-
     )
