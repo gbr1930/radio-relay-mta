@@ -17,8 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 COOKIES_PATH = "/app/cookies.txt"
 POT_URL = "http://127.0.0.1:4416"
-STREAM_TIMEOUT = 3600  # 1h — expira streams antigos
-STREAM_TTL_CHECK = 300  # checa expiração a cada 5 min
+STREAM_TIMEOUT = 7200        # 2h — streams antigos são limpos
+STREAM_TTL_CHECK = 300       # checa a cada 5 min
 
 app = FastAPI(title="MTA Live Equalizer")
 
@@ -29,13 +29,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Registro de streams ativos em memória
-# { stream_id: { "proc": Popen, "yt_url": str, "filters": str, "created": float } }
+# { stream_id: { "proc", "cmd", "yt_url", "original_url", "filters", "created" } }
 active_streams: Dict[str, dict] = {}
 
 
 # =========================================================
-# UTILITÁRIOS
+# COOKIES
+# =========================================================
+
+def ensure_cookies_file():
+    """Garante que o cookies.txt existe e tem formato válido."""
+    if os.path.exists(COOKIES_PATH):
+        return True
+
+    content = os.getenv("YT_COOKIES_CONTENT", "")
+    if not content:
+        print("⚠️  YT_COOKIES_CONTENT não definida")
+        return False
+
+    content = content.replace("\\n", "\n").replace("\r\n", "\n")
+
+    if not content.startswith("# Netscape HTTP Cookie File"):
+        print("⚠️  cookies.txt não está em formato Netscape!")
+        if "\t" in content:
+            content = "# Netscape HTTP Cookie File\n" + content
+
+    with open(COOKIES_PATH, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    lines = content.strip().splitlines()
+    cookie_lines = [l for l in lines if l and not l.startswith("#")]
+    print(f"✅ cookies.txt criado: {len(cookie_lines)} cookies, {len(content)} bytes")
+
+    for ess in ["SID\t", "__Secure-1PSID\t", "SAPISID\t", "LOGIN_INFO\t"]:
+        if ess in content:
+            print(f"   ✅ {ess.strip()}")
+        else:
+            print(f"   ❌ FALTANDO: {ess.strip()}")
+    return True
+
+
+# =========================================================
+# EXTRAÇÃO DO YOUTUBE
 # =========================================================
 
 def get_real_stream_url(url: str) -> Optional[str]:
@@ -44,7 +79,7 @@ def get_real_stream_url(url: str) -> Optional[str]:
         search_target = f"ytsearch1:{url}"
     else:
         url = url.replace("music.youtube.com", "www.youtube.com")
-        url = re.sub(r"[?&]list=[^&]+", "", url)  # remove playlist
+        url = re.sub(r"[?&]list=[^&]+", "", url)
         url = re.sub(r"[?&]start_radio=[^&]+", "", url)
         search_target = url
 
@@ -74,12 +109,15 @@ def get_real_stream_url(url: str) -> Optional[str]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=30,
+            timeout=45,
         )
 
         if result.stderr:
-            for line in result.stderr.strip().splitlines()[-10:]:
-                print(f"[yt-dlp] {line}")
+            print("=" * 60)
+            print(f"[yt-dlp] returncode: {result.returncode}")
+            for line in result.stderr.strip().splitlines():
+                print(f"  [yt-dlp] {line}")
+            print("=" * 60)
 
         if result.returncode == 0 and result.stdout.strip():
             stream_url = result.stdout.strip().splitlines()[0]
@@ -89,64 +127,84 @@ def get_real_stream_url(url: str) -> Optional[str]:
         print(f"❌ yt-dlp falhou (returncode {result.returncode})")
 
     except subprocess.TimeoutExpired:
-        print("❌ Timeout do yt-dlp (30s)")
+        print("❌ Timeout do yt-dlp (45s)")
     except Exception as e:
         print(f"❌ Erro yt-dlp: {e}")
 
     return None
 
 
+# =========================================================
+# FILTROS FFMPEG
+# =========================================================
+
 def build_ffmpeg_filters(
     bass: float, mid: float, treble: float,
     bassboost: float, anti: float,
     reverb: str, reverbmix: float,
 ) -> str:
-    """Monta a cadeia de filtros do FFmpeg baseado nos parâmetros."""
     filters = []
 
-    # Equalizador básico (3 bandas)
     if bass != 0:
         filters.append(f"bass=g={bass}:f=100:w=0.6")
     if mid != 0:
-        # mid usa equalizer (frequência central 1000 Hz)
         filters.append(f"equalizer=f=1000:t=q:w=1:g={mid}")
     if treble != 0:
         filters.append(f"treble=g={treble}:f=8000:w=0.6")
 
-    # Bass Booster (mais agressivo, sub-bass)
     if bassboost > 0:
         filters.append(f"bass=g={bassboost}:f=60:w=0.5")
 
-    # Anti-distorção (compressor)
-    # anti=0 → sem compressão; anti=100 → compressão máxima
     if anti > 0:
-        # threshold vai de -3dB (pouca compressão) a -20dB (muita compressão)
         threshold = -3 - (anti / 100) * 17
         filters.append(
             f"acompressor=threshold={threshold:.1f}dB:ratio=4:attack=5:release=80:makeup=2"
         )
 
-    # Reverb (precisa de arquivos IR em /app/ir/)
     if reverb != "off" and reverbmix > 0:
-        ir_files = {
-            "small":   "/app/ir/small.wav",
-            "hall":    "/app/ir/hall.wav",
-            "church":  "/app/ir/church.wav",
-            "stadium": "/app/ir/stadium.wav",
+        mix = reverbmix / 100
+        reverb_presets = {
+            "small":   "0.6:0.4:40:0.3:0.2:60:0.15",
+            "hall":    "0.7:0.6:100:0.5:0.3:150:0.25",
+            "church":  "0.8:0.7:200:0.6:0.4:300:0.35",
+            "stadium": "0.9:0.8:400:0.7:0.5:600:0.45",
         }
-        ir_file = ir_files.get(reverb)
-        if ir_file and os.path.exists(ir_file):
-            mix = reverbmix / 100
-            filters.append(f"afir=gtype=0:ir={ir_file}:mix={mix:.2f}")
-        else:
-            print(f"⚠️  Reverb '{reverb}' solicitado mas IR não encontrado em {ir_file}")
+        preset = reverb_presets.get(reverb)
+        if preset:
+            filters.append(f"aecho={preset}")
+            filters.append(f"volume={1.0 + mix * 0.3:.2f}")
 
-    # Se nenhum filtro aplicado, retorna nulo
     return ",".join(filters) if filters else "anull"
 
 
+def build_ffmpeg_cmd(yt_url: str, filters: str) -> list:
+    """Monta o comando do FFmpeg (leve, para caber em 1 GB)."""
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-threads", "1",
+        "-filter_threads", "1",
+        "-reconnect", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
+        "-i", yt_url,
+        "-af", filters,
+        "-f", "mp3",
+        "-b:a", "128k",
+        "-ar", "44100",
+        "-ac", "2",
+        "-bufsize", "64k",
+        "-max_muxing_queue_size", "64",
+        "pipe:1",
+    ]
+
+
+# =========================================================
+# HELPERS
+# =========================================================
+
 def stream_audio_generator(proc: subprocess.Popen, chunk_size: int = 4096):
-    """Generator que lê do stdout do FFmpeg e envia em chunks."""
     try:
         while True:
             chunk = proc.stdout.read(chunk_size)
@@ -161,7 +219,6 @@ def stream_audio_generator(proc: subprocess.Popen, chunk_size: int = 4096):
 
 
 def cleanup_expired_streams():
-    """Remove streams antigos (>1h) para liberar memória."""
     now = time.time()
     expired = [
         sid for sid, info in active_streams.items()
@@ -183,8 +240,16 @@ async def periodic_cleanup():
         cleanup_expired_streams()
 
 
+def build_public_url(stream_id: str) -> str:
+    host = os.getenv("RENDER_EXTERNAL_HOSTNAME") or os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    if host:
+        return f"https://{host}/live/{stream_id}"
+    return f"/live/{stream_id}"
+
+
 @app.on_event("startup")
 async def startup_event():
+    ensure_cookies_file()
     asyncio.create_task(periodic_cleanup())
 
 
@@ -229,45 +294,22 @@ async def stream_preview(
     reverb: str = "off",
     reverbmix: float = 0,
 ):
-    """
-    Preview no navegador: extrai áudio do YouTube, aplica filtros e
-    envia via StreamingResponse (progressive download).
-    """
+    """Preview no navegador."""
     yt_url = get_real_stream_url(url)
     if not yt_url:
-        raise HTTPException(status_code=500, detail="Não foi possível extrair o áudio do YouTube")
+        raise HTTPException(status_code=500, detail="Não foi possível extrair o áudio")
 
     filters = build_ffmpeg_filters(bass, mid, treble, bassboost, anti, reverb, reverbmix)
-    print(f"🎛️  Filtros aplicados: {filters}")
-
-    # FFmpeg lê do YouTube e envia MP3 via pipe
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "error",
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
-        "-i", yt_url,
-        "-af", filters,
-        "-f", "mp3",
-        "-b:a", "192k",
-        "-ar", "44100",
-        "-ac", "2",
-        "pipe:1",
-    ]
+    print(f"🎛️  Filtros: {filters}")
 
     proc = subprocess.Popen(
-        ffmpeg_cmd,
+        build_ffmpeg_cmd(yt_url, filters),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         bufsize=0,
     )
 
-    return StreamingResponse(
-        stream_audio_generator(proc),
-        media_type="audio/mpeg",
-    )
+    return StreamingResponse(stream_audio_generator(proc), media_type="audio/mpeg")
 
 
 @app.get("/api/create-stream")
@@ -281,10 +323,7 @@ async def create_stream(
     reverb: str = "off",
     reverbmix: float = 0,
 ):
-    """
-    Gera um stream persistente para o MTA:SA.
-    Retorna uma URL /live/<id> que pode ser consumida pelo MTA.
-    """
+    """Cria um stream persistente para o MTA."""
     yt_url = get_real_stream_url(url)
     if not yt_url:
         return JSONResponse(
@@ -293,54 +332,22 @@ async def create_stream(
         )
 
     filters = build_ffmpeg_filters(bass, mid, treble, bassboost, anti, reverb, reverbmix)
-    stream_id = str(uuid.uuid4())[:8]
 
-    # Verifica se já existe um stream idêntico (mesma URL + filtros) e reaproveita
+    # Reaproveita stream idêntico se existir e estiver vivo
     for sid, info in active_streams.items():
-        if info["yt_url"] == yt_url and info["filters"] == filters:
+        if (
+            info["original_url"] == url
+            and info["filters"] == filters
+            and info["proc"].poll() is None
+        ):
             print(f"♻️  Reaproveitando stream {sid}")
             return {"stream_url": build_public_url(sid), "id": sid, "reused": True}
 
-    # Inicia FFmpeg em modo "streaming infinito" (MP3 192k)
-    # Nota: o FFmpeg vai rodar continuamente, o MTA conecta em /live/<id>
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "error",
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
-        "-i", yt_url,
-        "-af", filters,
-        "-f", "mp3",
-        "-b:a", "192k",
-        "-ar", "44100",
-        "-ac", "2",
-        "-listen", "1",          # Modo servidor HTTP
-        f"http://0.0.0.0:0/live", # FFmpeg escolhe a porta, mas na prática usamos pipe
-    ]
-
-    # ATENÇÃO: o comando acima com "-listen 1" não é confiável.
-    # Melhor abordagem: usar pipe e servir via /live/<id> com StreamingResponse.
-    # Reexecuta com pipe:
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "error",
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
-        "-i", yt_url,
-        "-af", filters,
-        "-f", "mp3",
-        "-b:a", "192k",
-        "-ar", "44100",
-        "-ac", "2",
-        "pipe:1",
-    ]
+    stream_id = str(uuid.uuid4())[:8]
+    cmd = build_ffmpeg_cmd(yt_url, filters)
 
     proc = subprocess.Popen(
-        ffmpeg_cmd,
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         bufsize=0,
@@ -348,7 +355,9 @@ async def create_stream(
 
     active_streams[stream_id] = {
         "proc": proc,
+        "cmd": cmd,
         "yt_url": yt_url,
+        "original_url": url,
         "filters": filters,
         "created": time.time(),
     }
@@ -366,17 +375,45 @@ async def create_stream(
 async def live_stream(stream_id: str):
     """
     Endpoint consumido pelo MTA:SA.
-    Retorna o áudio processado em MP3.
+    Se o FFmpeg morreu, reinicia automaticamente pegando URL fresca do YouTube.
     """
     info = active_streams.get(stream_id)
     if not info:
-        raise HTTPException(status_code=404, detail="Stream não encontrado ou expirado")
+        raise HTTPException(status_code=404, detail="Stream não encontrado")
 
     proc = info["proc"]
+
+    # Se o FFmpeg morreu, reinicia com URL nova
     if proc.poll() is not None:
-        # Processo morreu, remove
-        active_streams.pop(stream_id, None)
-        raise HTTPException(status_code=410, detail="Stream expirou")
+        print(f"♻️  FFmpeg morreu para {stream_id}, reiniciando...")
+
+        new_yt_url = get_real_stream_url(info["original_url"])
+        if not new_yt_url:
+            print(f"❌ Não conseguiu nova URL para {stream_id}")
+            active_streams.pop(stream_id, None)
+            raise HTTPException(status_code=500, detail="Não foi possível renovar o stream")
+
+        new_cmd = build_ffmpeg_cmd(new_yt_url, info["filters"])
+
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+        new_proc = subprocess.Popen(
+            new_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+
+        info["proc"] = new_proc
+        info["cmd"] = new_cmd
+        info["yt_url"] = new_yt_url
+        info["created"] = time.time()
+        proc = new_proc
+
+        print(f"✅ FFmpeg reiniciado para {stream_id}")
 
     return StreamingResponse(
         stream_audio_generator(proc),
@@ -398,14 +435,3 @@ async def stop_stream(stream_id: str):
     except Exception:
         pass
     return {"stopped": stream_id}
-
-
-# =========================================================
-# HELPERS
-# =========================================================
-
-def build_public_url(stream_id: str) -> str:
-    host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-    if host:
-        return f"https://{host}/live/{stream_id}"
-    return f"/live/{stream_id}"
