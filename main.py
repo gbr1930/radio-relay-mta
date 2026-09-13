@@ -17,8 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 COOKIES_PATH = "/app/cookies.txt"
 POT_URL = "http://127.0.0.1:4416"
-STREAM_TIMEOUT = 7200        # 2h — streams antigos são limpos
-STREAM_TTL_CHECK = 300       # checa a cada 5 min
+STREAM_TIMEOUT = 7200
+STREAM_TTL_CHECK = 300
+
+# Proxy opcional (para Cloudflare WARP ou outro SOCKS5/HTTP)
+YTDLP_PROXY = os.getenv("YTDLP_PROXY", "").strip()
 
 app = FastAPI(title="MTA Live Equalizer")
 
@@ -29,7 +32,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# { stream_id: { "proc", "cmd", "yt_url", "original_url", "filters", "created" } }
 active_streams: Dict[str, dict] = {}
 
 
@@ -38,7 +40,6 @@ active_streams: Dict[str, dict] = {}
 # =========================================================
 
 def ensure_cookies_file():
-    """Garante que o cookies.txt existe e tem formato válido."""
     if os.path.exists(COOKIES_PATH):
         return True
 
@@ -74,7 +75,6 @@ def ensure_cookies_file():
 # =========================================================
 
 def get_real_stream_url(url: str) -> Optional[str]:
-    """Extrai a URL direta do áudio do YouTube usando yt-dlp + POT + cookies."""
     if not url.startswith("http://") and not url.startswith("https://"):
         search_target = f"ytsearch1:{url}"
     else:
@@ -89,12 +89,16 @@ def get_real_stream_url(url: str) -> Optional[str]:
         "-f", "bestaudio[ext=m4a]/bestaudio/best",
         "--no-playlist",
         "--no-warnings",
-        "--extractor-args", "youtube:player_client=web_safari,mweb,tv",
+        "--extractor-args", "youtube:player_client=tv,mweb,web_safari,android_vr;player_skip=webpage,configs",
         "--extractor-args", f"youtubepot-bgutilhttp:base_url={POT_URL}",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "--referer", "https://www.youtube.com/",
         "--add-header", "Accept-Language:en-US,en;q=0.9",
     ]
+
+    if YTDLP_PROXY:
+        command.extend(["--proxy", YTDLP_PROXY])
+        print(f"🌐 Usando proxy: {YTDLP_PROXY}")
 
     if os.path.exists(COOKIES_PATH):
         command.extend(["--cookies", COOKIES_PATH])
@@ -112,12 +116,16 @@ def get_real_stream_url(url: str) -> Optional[str]:
             timeout=45,
         )
 
-        if result.stderr:
-            print("=" * 60)
-            print(f"[yt-dlp] returncode: {result.returncode}")
-            for line in result.stderr.strip().splitlines():
-                print(f"  [yt-dlp] {line}")
-            print("=" * 60)
+        # Log SEMPRE, mesmo em sucesso
+        print("=" * 60)
+        print(f"[yt-dlp] returncode: {result.returncode}")
+        print(f"[yt-dlp] STDOUT ({len(result.stdout)} bytes):")
+        for line in result.stdout.strip().splitlines():
+            print(f"   > {line[:120]}")
+        print(f"[yt-dlp] STDERR:")
+        for line in result.stderr.strip().splitlines():
+            print(f"   ! {line[:200]}")
+        print("=" * 60)
 
         if result.returncode == 0 and result.stdout.strip():
             stream_url = result.stdout.strip().splitlines()[0]
@@ -178,11 +186,10 @@ def build_ffmpeg_filters(
 
 
 def build_ffmpeg_cmd(yt_url: str, filters: str) -> list:
-    """Monta o comando do FFmpeg (leve, para caber em 1 GB)."""
     return [
         "ffmpeg",
         "-hide_banner",
-        "-loglevel", "error",
+        "-loglevel", "warning",
         "-threads", "1",
         "-filter_threads", "1",
         "-reconnect", "1",
@@ -280,6 +287,7 @@ async def health():
         "pot": pot_ok,
         "cookies": os.path.exists(COOKIES_PATH),
         "active_streams": len(active_streams),
+        "proxy": bool(YTDLP_PROXY),
     }
 
 
@@ -294,7 +302,6 @@ async def stream_preview(
     reverb: str = "off",
     reverbmix: float = 0,
 ):
-    """Preview no navegador."""
     yt_url = get_real_stream_url(url)
     if not yt_url:
         raise HTTPException(status_code=500, detail="Não foi possível extrair o áudio")
@@ -323,7 +330,6 @@ async def create_stream(
     reverb: str = "off",
     reverbmix: float = 0,
 ):
-    """Cria um stream persistente para o MTA."""
     yt_url = get_real_stream_url(url)
     if not yt_url:
         return JSONResponse(
@@ -333,7 +339,6 @@ async def create_stream(
 
     filters = build_ffmpeg_filters(bass, mid, treble, bassboost, anti, reverb, reverbmix)
 
-    # Reaproveita stream idêntico se existir e estiver vivo
     for sid, info in active_streams.items():
         if (
             info["original_url"] == url
@@ -373,17 +378,12 @@ async def create_stream(
 
 @app.get("/live/{stream_id}")
 async def live_stream(stream_id: str):
-    """
-    Endpoint consumido pelo MTA:SA.
-    Se o FFmpeg morreu, reinicia automaticamente pegando URL fresca do YouTube.
-    """
     info = active_streams.get(stream_id)
     if not info:
         raise HTTPException(status_code=404, detail="Stream não encontrado")
 
     proc = info["proc"]
 
-    # Se o FFmpeg morreu, reinicia com URL nova
     if proc.poll() is not None:
         print(f"♻️  FFmpeg morreu para {stream_id}, reiniciando...")
 
